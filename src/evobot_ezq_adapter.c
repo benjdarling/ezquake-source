@@ -1,8 +1,10 @@
+#include "quakedef.h"
 #include "qwsvdef.h"
 
 #include <limits.h>
 
 #include "evobot_ezq_adapter.h"
+#include "evobot_ezq_debug.h"
 
 static evobot_host_api_t evobot_ezq_host;
 static int evobot_ezq_initialized;
@@ -106,6 +108,108 @@ static evobot_contents_t EvoBot_EZQ_PointContents(const evobot_vec3_t *point)
 	default:
 		return EVOBOT_CONTENTS_OTHER;
 	}
+}
+
+static evobot_contents_t EvoBot_EZQ_MoveContents(int contents)
+{
+	switch (contents)
+	{
+	case CONTENTS_EMPTY:
+		return EVOBOT_CONTENTS_AIR;
+	case CONTENTS_SOLID:
+		return EVOBOT_CONTENTS_SOLID;
+	case CONTENTS_WATER:
+		return EVOBOT_CONTENTS_WATER;
+	case CONTENTS_SLIME:
+		return EVOBOT_CONTENTS_SLIME;
+	case CONTENTS_LAVA:
+		return EVOBOT_CONTENTS_LAVA;
+	default:
+		return EVOBOT_CONTENTS_OTHER;
+	}
+}
+
+static void EvoBot_EZQ_SetMoveVars(void)
+{
+	extern cvar_t pm_airstep;
+	extern cvar_t pm_bunnyspeedcap;
+	extern cvar_t pm_ktjump;
+	extern cvar_t pm_pground;
+	extern cvar_t pm_rampjump;
+	extern cvar_t pm_slidefix;
+
+	SV_SetMoveVars();
+	movevars.bunnyspeedcap = pm_bunnyspeedcap.value;
+	movevars.ktjump = pm_ktjump.value;
+	movevars.slidefix = pm_slidefix.value != 0;
+	movevars.airstep = pm_airstep.value != 0;
+	movevars.pground = pm_pground.value != 0;
+	movevars.rampjump = (int)pm_rampjump.value;
+}
+
+static int EvoBot_EZQ_PlayerPhysics(evobot_player_physics_t *physics)
+{
+	if (!physics || sv.state != ss_active || !sv.worldmodel)
+		return 0;
+	EvoBot_EZQ_SetMoveVars();
+	physics->step_height = PM_STEP_SIZE;
+	physics->minimum_ground_normal = MIN_STEP_NORMAL;
+	physics->gravity = movevars.gravity;
+	physics->maximum_speed = movevars.maxspeed;
+	return 1;
+}
+
+static int EvoBot_EZQ_SimulatePlayerMove(
+	const evobot_player_move_state_t *state,
+	const evobot_player_move_command_t *command,
+	evobot_player_move_result_t *result)
+{
+	playermove_t saved_pmove;
+	movevars_t saved_movevars;
+	int blocked;
+
+	if (!state || !command || !result || sv.state != ss_active || !sv.worldmodel ||
+		command->msec > 255)
+		return 0;
+	saved_pmove = pmove;
+	saved_movevars = movevars;
+	memset(&pmove, 0, sizeof(pmove));
+	VectorSet(pmove.origin, state->origin.v[0], state->origin.v[1], state->origin.v[2]);
+	VectorSet(pmove.velocity, state->velocity.v[0], state->velocity.v[1],
+		state->velocity.v[2]);
+	VectorSet(pmove.angles, state->angles.v[0], state->angles.v[1],
+		state->angles.v[2]);
+	pmove.waterjumptime = state->water_jump_time;
+	pmove.onground = state->on_ground;
+	pmove.waterlevel = state->water_level;
+	pmove.jump_held = state->jump_held;
+	pmove.jump_msec = state->jump_msec;
+	pmove.pm_type = PM_NORMAL;
+	pmove.numphysent = 1;
+	pmove.physents[0].model = sv.worldmodel;
+	pmove.cmd.msec = (byte)command->msec;
+	pmove.cmd.forwardmove = command->forward_move;
+	pmove.cmd.sidemove = command->side_move;
+	pmove.cmd.upmove = command->up_move;
+	pmove.cmd.buttons = (byte)command->buttons;
+	pmove.cmd.impulse = (byte)command->impulse;
+	VectorCopy(pmove.angles, pmove.cmd.angles);
+	EvoBot_EZQ_SetMoveVars();
+	blocked = PM_PlayerMove();
+	memset(result, 0, sizeof(*result));
+	EvoBot_EZQ_CopyVector(pmove.origin, &result->state.origin);
+	EvoBot_EZQ_CopyVector(pmove.velocity, &result->state.velocity);
+	EvoBot_EZQ_CopyVector(pmove.angles, &result->state.angles);
+	result->state.water_jump_time = pmove.waterjumptime;
+	result->state.on_ground = pmove.onground;
+	result->state.water_level = pmove.waterlevel;
+	result->state.jump_held = pmove.jump_held;
+	result->state.jump_msec = pmove.jump_msec;
+	result->contents = EvoBot_EZQ_MoveContents(pmove.watertype);
+	result->blocked = blocked;
+	pmove = saved_pmove;
+	movevars = saved_movevars;
+	return 1;
 }
 
 static int EvoBot_EZQ_CollisionLeaf(int contents)
@@ -311,6 +415,63 @@ static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interac
 	}
 
 	return 0;
+}
+
+static int EvoBot_EZQ_BoundsIntersect(const evobot_bounds_t *a,
+	const evobot_bounds_t *b)
+{
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		if (a->maxs.v[axis] < b->mins.v[axis] ||
+			a->mins.v[axis] > b->maxs.v[axis])
+			return 0;
+	}
+	return 1;
+}
+
+static evobot_dynamic_blocker_state_t EvoBot_EZQ_DynamicBlockerState(
+	const evobot_host_interactor_t *interactor,
+	const evobot_bounds_t *crossing_bounds)
+{
+	extern vec3_t player_mins;
+	extern vec3_t player_maxs;
+	int i;
+
+	if (!interactor || !crossing_bounds || sv.state != ss_active ||
+		!interactor->dynamic_brush)
+		return EVOBOT_DYNAMIC_BLOCKER_UNKNOWN;
+	if (interactor->kind != EVOBOT_INTERACTOR_DOOR)
+		return EVOBOT_DYNAMIC_BLOCKER_UNKNOWN;
+	for (i = 0; i < sv.num_edicts; i++)
+	{
+		edict_t *entity = EDICT_NUM(i);
+		evobot_bounds_t blocking_bounds;
+		const char *classname;
+		const char *model;
+		int axis;
+
+		if (!entity || entity->e.free || !entity->v->classname)
+			continue;
+		classname = PR_GetEntityString(entity->v->classname);
+		model = PR_GetEntityString(entity->v->model);
+		if (EvoBot_EZQ_InteractorKind(classname) != interactor->kind ||
+			!interactor->model[0] || strcmp(model, interactor->model))
+			continue;
+		if (entity->v->solid != SOLID_BSP)
+			return EVOBOT_DYNAMIC_BLOCKER_CLEAR;
+		for (axis = 0; axis < 3; axis++)
+		{
+			blocking_bounds.mins.v[axis] = entity->v->absmin[axis] -
+				player_maxs[axis];
+			blocking_bounds.maxs.v[axis] = entity->v->absmax[axis] -
+				player_mins[axis];
+		}
+		return EvoBot_EZQ_BoundsIntersect(&blocking_bounds, crossing_bounds) ?
+			EVOBOT_DYNAMIC_BLOCKER_BLOCKED : EVOBOT_DYNAMIC_BLOCKER_CLEAR;
+	}
+	return EVOBOT_DYNAMIC_BLOCKER_UNKNOWN;
 }
 
 static int EvoBot_EZQ_FileSize(const char *path, size_t *size)
@@ -522,6 +683,16 @@ static void EvoBot_EZQ_NavStatus_f(void)
 	EvoBot_NavConvexPrintStatus();
 }
 
+static void EvoBot_EZQ_NavReachStatus_f(void)
+{
+	EvoBot_NavReachPrintStatus();
+}
+
+static void EvoBot_EZQ_NavReachValidate_f(void)
+{
+	EvoBot_NavReachValidate();
+}
+
 static void EvoBot_EZQ_NavSave_f(void)
 {
 	EvoBot_NavConvexSave();
@@ -547,6 +718,112 @@ static void EvoBot_EZQ_NavExportObj_f(void)
 	EvoBot_NavConvexExportObj();
 }
 
+static int EvoBot_EZQ_NavParseArea(int argument, uint32_t *area)
+{
+	char *end;
+	unsigned long value;
+
+	if (!area || argument >= Cmd_Argc() || !Cmd_Argv(argument)[0])
+		return 0;
+	value = strtoul(Cmd_Argv(argument), &end, 10);
+	if (*end || !value || value > UINT32_MAX)
+		return 0;
+	*area = (uint32_t)value;
+	return 1;
+}
+
+static int EvoBot_EZQ_NavRouteSource(uint32_t *area)
+{
+	int i;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		evobot_vec3_t origin;
+
+		if (evobot_ezq_client_handles[i] == EVOBOT_CLIENT_HANDLE_INVALID ||
+			!EvoBot_EZQ_IsBotClientValid(evobot_ezq_client_handles[i]))
+			continue;
+		EvoBot_EZQ_CopyVector(svs.clients[i].edict->v->origin, &origin);
+		if (EvoBot_NavDebugFindArea(&origin, area))
+			return 1;
+	}
+	if (cl.worldmodel)
+	{
+		evobot_vec3_t origin;
+
+		EvoBot_EZQ_CopyVector(cl.simorg, &origin);
+		if (EvoBot_NavDebugFindArea(&origin, area))
+			return 1;
+	}
+	Con_Printf("EvoBot routing: no EvoBot or local player is in a navigation area\n");
+	return 0;
+}
+
+static void EvoBot_EZQ_NavRouteExit_f(void)
+{
+	uint32_t source = 0;
+
+	if (Cmd_Argc() > 2 ||
+		(Cmd_Argc() == 2 && !EvoBot_EZQ_NavParseArea(1, &source)))
+	{
+		Con_Printf("usage: evobot_nav_route_exit [source area]\n");
+		return;
+	}
+	if (Cmd_Argc() == 1 && !EvoBot_EZQ_NavRouteSource(&source))
+		return;
+	if (!EvoBot_NavRouteBuild(source, NULL) || !EvoBot_NavRouteSelectExit())
+		return;
+	Con_Printf("EvoBot route to exit\n");
+	EvoBot_NavRoutePrintStatus();
+}
+
+static void EvoBot_EZQ_NavRouteArea_f(void)
+{
+	uint32_t source = 0;
+	uint32_t destination;
+
+	if ((Cmd_Argc() != 2 && Cmd_Argc() != 3) ||
+		!EvoBot_EZQ_NavParseArea(1, &destination) ||
+		(Cmd_Argc() == 3 && !EvoBot_EZQ_NavParseArea(2, &source)))
+	{
+		Con_Printf("usage: evobot_nav_route_area <area id> [source area]\n");
+		return;
+	}
+	if ((Cmd_Argc() == 2 && !EvoBot_EZQ_NavRouteSource(&source)) ||
+		!EvoBot_NavRouteBuild(source, NULL) ||
+		!EvoBot_NavRouteSelectArea(destination))
+		return;
+	EvoBot_NavRoutePrintStatus();
+}
+
+static void EvoBot_EZQ_NavRouteClear_f(void)
+{
+	EvoBot_NavRouteClear();
+	Con_Printf("EvoBot route cleared\n");
+}
+
+static void EvoBot_EZQ_NavRouteStatus_f(void)
+{
+	EvoBot_NavRoutePrintStatus();
+}
+
+static void EvoBot_EZQ_NavCost_f(void)
+{
+	uint32_t area;
+
+	if (Cmd_Argc() != 2 || !EvoBot_EZQ_NavParseArea(1, &area))
+	{
+		Con_Printf("usage: evobot_nav_cost <area id>\n");
+		return;
+	}
+	EvoBot_NavRoutePrintCost(area);
+}
+
+static void EvoBot_EZQ_NavRouteValidate_f(void)
+{
+	EvoBot_NavRouteValidate();
+}
+
 void EvoBot_EZQ_Init(void)
 {
 	if (evobot_ezq_initialized)
@@ -562,10 +839,13 @@ void EvoBot_EZQ_Init(void)
 	evobot_ezq_host.player_bounds = EvoBot_EZQ_PlayerBounds;
 	evobot_ezq_host.trace_player_world = EvoBot_EZQ_TracePlayerWorld;
 	evobot_ezq_host.point_contents = EvoBot_EZQ_PointContents;
+	evobot_ezq_host.player_physics = EvoBot_EZQ_PlayerPhysics;
+	evobot_ezq_host.simulate_player_move = EvoBot_EZQ_SimulatePlayerMove;
 	evobot_ezq_host.collision_tree = EvoBot_EZQ_CollisionTree;
 	evobot_ezq_host.collision_node = EvoBot_EZQ_CollisionNode;
 	evobot_ezq_host.interactor_count = EvoBot_EZQ_InteractorCount;
 	evobot_ezq_host.get_interactor = EvoBot_EZQ_GetInteractor;
+	evobot_ezq_host.dynamic_blocker_state = EvoBot_EZQ_DynamicBlockerState;
 	evobot_ezq_host.file_size = EvoBot_EZQ_FileSize;
 	evobot_ezq_host.read_file = EvoBot_EZQ_ReadFile;
 	evobot_ezq_host.write_file = EvoBot_EZQ_WriteFile;
@@ -577,10 +857,19 @@ void EvoBot_EZQ_Init(void)
 	Cmd_AddCommand("evobot_remove", EvoBot_EZQ_Remove_f);
 	Cmd_AddCommand("evobot_nav_generate", EvoBot_EZQ_NavGenerate_f);
 	Cmd_AddCommand("evobot_nav_status", EvoBot_EZQ_NavStatus_f);
+	Cmd_AddCommand("evobot_nav_reach_status", EvoBot_EZQ_NavReachStatus_f);
+	Cmd_AddCommand("evobot_nav_reach_validate", EvoBot_EZQ_NavReachValidate_f);
 	Cmd_AddCommand("evobot_nav_save", EvoBot_EZQ_NavSave_f);
 	Cmd_AddCommand("evobot_nav_load", EvoBot_EZQ_NavLoad_f);
 	Cmd_AddCommand("evobot_nav_clear", EvoBot_EZQ_NavClear_f);
 	Cmd_AddCommand("evobot_nav_export_obj", EvoBot_EZQ_NavExportObj_f);
+	Cmd_AddCommand("evobot_nav_route_exit", EvoBot_EZQ_NavRouteExit_f);
+	Cmd_AddCommand("evobot_nav_route_area", EvoBot_EZQ_NavRouteArea_f);
+	Cmd_AddCommand("evobot_nav_route_clear", EvoBot_EZQ_NavRouteClear_f);
+	Cmd_AddCommand("evobot_nav_route_status", EvoBot_EZQ_NavRouteStatus_f);
+	Cmd_AddCommand("evobot_nav_cost", EvoBot_EZQ_NavCost_f);
+	Cmd_AddCommand("evobot_nav_route_validate", EvoBot_EZQ_NavRouteValidate_f);
+	EvoBot_EZQ_DebugInit();
 	evobot_ezq_initialized = 1;
 }
 
@@ -662,6 +951,7 @@ void EvoBot_EZQ_Shutdown(void)
 		return;
 
 	EvoBot_EZQ_MapCleared();
+	EvoBot_EZQ_DebugShutdown();
 	EvoBot_Shutdown();
 	memset(&evobot_ezq_host, 0, sizeof(evobot_ezq_host));
 	memset(evobot_ezq_client_handles, 0, sizeof(evobot_ezq_client_handles));

@@ -82,6 +82,7 @@ static const char* vaoNames[] = {
 	"hud:lines",
 	"hud:polygons",
 	"post-process",
+	"debug-lines",
 	"powerupshell",
 	"brushmodel_details",
 	"brushmodel_lightmap_pass",

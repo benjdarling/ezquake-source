@@ -211,6 +211,7 @@ typedef enum {
 	r_state_default_opengl,
 
 	r_state_default_3d,
+	r_state_debug_lines,
 	r_state_sprites_textured,
 
 	r_state_default_2d,

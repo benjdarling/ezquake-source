@@ -32,6 +32,7 @@ typedef enum {
 	r_program_brushmodel_alphatested,
 	r_program_simple,
 	r_program_simple3d,
+	r_program_debug_lines,
 
 	r_program_count
 } r_program_id;

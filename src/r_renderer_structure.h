@@ -57,6 +57,9 @@ RENDERER_METHOD(void, EnsureFinished, void)
 RENDERER_METHOD(void, Begin2DRendering, void)
 RENDERER_METHOD(qbool, IsFramebufferEnabled3D, void)
 
+// Debug primitives
+RENDERER_METHOD(void, Draw3DLines, const r_debug_line_vertex_t* vertices, int vertex_count, float thickness)
+
 // Post-processing (scene)
 RENDERER_METHOD(void, RenderView, void)
 RENDERER_METHOD(void, PreRenderView, void)

@@ -447,7 +447,15 @@ static void R_InitialiseBrushModelStates(void)
 
 void R_InitialiseStates(void)
 {
+	rendering_state_t* state;
+
 	R_InitRenderingState(r_state_default_3d, true, "default3DState", vao_none);
+	state = R_InitRenderingState(r_state_debug_lines, true, "debugLinesState",
+		R_UseImmediateOpenGL() ? vao_none : vao_debug_lines);
+	state->depth.test_enabled = true;
+	state->depth.mask_enabled = false;
+	state->cullface.enabled = false;
+	state->line.flexible_width = true;
 
 	R_InitialiseSpriteStates();
 	R_InitialiseBrushModelStates();

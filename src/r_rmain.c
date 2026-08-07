@@ -42,6 +42,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "r_lightmaps.h"
 #include "r_trace.h"
 #include "r_renderer.h"
+#include "evobot_ezq_debug.h"
 
 #define R_FogAvailable() (!COM_CheckParm(cmdline_param_client_nomultitexturing))
 
@@ -898,6 +899,7 @@ void R_RenderView(void)
 	R_Render3DHud();
 
 	renderer.RenderView();
+	EvoBot_EZQ_DebugDraw();
 }
 
 qbool R_PointIsUnderwater(vec3_t point)

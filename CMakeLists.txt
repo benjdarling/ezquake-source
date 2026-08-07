@@ -230,6 +230,7 @@ source_group(TREE ${QWPROT_SOURCE_DIR} PREFIX "Header Files/qwprot" FILES ${qwpr
 
 set(server_headers
 		${SOURCE_DIR}/evobot_ezq_adapter.h
+		${SOURCE_DIR}/evobot_ezq_debug.h
         ${SOURCE_DIR}/g_public.h
         ${SOURCE_DIR}/pr2.h
         ${SOURCE_DIR}/pr_comp.h
@@ -245,6 +246,7 @@ set(server_headers
 )
 set(server
 		${SOURCE_DIR}/evobot_ezq_adapter.c
+		${SOURCE_DIR}/evobot_ezq_debug.c
         ${SOURCE_DIR}/pr2_cmds.c
         ${SOURCE_DIR}/pr2_edict.c
         ${SOURCE_DIR}/pr2_exec.c
@@ -296,6 +298,8 @@ if(RENDERER_MODERN_OPENGL)
             ${MODERN_GLSL_DIR}/draw_sprites.vertex.glsl
             ${MODERN_GLSL_DIR}/draw_world.fragment.glsl
             ${MODERN_GLSL_DIR}/draw_world.vertex.glsl
+            ${MODERN_GLSL_DIR}/debug_lines.fragment.glsl
+            ${MODERN_GLSL_DIR}/debug_lines.vertex.glsl
             ${MODERN_GLSL_DIR}/fx_world_geometry.fragment.glsl
             ${MODERN_GLSL_DIR}/fx_world_geometry.vertex.glsl
             ${MODERN_GLSL_DIR}/hud_draw_circle.fragment.glsl
@@ -457,6 +461,7 @@ set(common_renderer_headers
         ${SOURCE_DIR}/r_buffers.h
         ${SOURCE_DIR}/r_chaticons.h
         ${SOURCE_DIR}/r_draw.h
+		${SOURCE_DIR}/r_debug_primitive.h
         ${SOURCE_DIR}/r_framestats.h
         ${SOURCE_DIR}/r_lighting.h
         ${SOURCE_DIR}/r_lightmaps.h
@@ -504,6 +509,7 @@ set(common_renderer
         ${SOURCE_DIR}/r_draw_image.c
         ${SOURCE_DIR}/r_draw_line.c
         ${SOURCE_DIR}/r_draw_polygon.c
+        ${SOURCE_DIR}/r_debug_primitive.c
         ${SOURCE_DIR}/r_hud.c
         ${SOURCE_DIR}/r_lightmaps.c
         ${SOURCE_DIR}/r_main.c

@@ -6,6 +6,7 @@
 #include "r_state.h"
 #include "r_vao.h"
 #include "gl_framebuffer.h"
+#include "r_debug_primitive.h"
 
 typedef enum {
 	r_cubemap_right,
