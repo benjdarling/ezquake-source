@@ -456,6 +456,17 @@ void R_InitialiseStates(void)
 	state->depth.mask_enabled = false;
 	state->cullface.enabled = false;
 	state->line.flexible_width = true;
+	state = R_CopyRenderingState(r_state_debug_lines_xray,
+		r_state_debug_lines, "debugLinesXRayState");
+	state->depth.test_enabled = false;
+	state = R_CopyRenderingState(r_state_debug_polygons,
+		r_state_debug_lines, "debugPolygonsState");
+	state->blendingEnabled = true;
+	state->blendFunc = r_blendfunc_premultiplied_alpha;
+	state->polygonOffset.option = r_polygonoffset_standard;
+	state = R_CopyRenderingState(r_state_debug_polygons_xray,
+		r_state_debug_polygons, "debugPolygonsXRayState");
+	state->depth.test_enabled = false;
 
 	R_InitialiseSpriteStates();
 	R_InitialiseBrushModelStates();

@@ -212,6 +212,9 @@ typedef enum {
 
 	r_state_default_3d,
 	r_state_debug_lines,
+	r_state_debug_lines_xray,
+	r_state_debug_polygons,
+	r_state_debug_polygons_xray,
 	r_state_sprites_textured,
 
 	r_state_default_2d,

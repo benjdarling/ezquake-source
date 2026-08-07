@@ -58,7 +58,8 @@ RENDERER_METHOD(void, Begin2DRendering, void)
 RENDERER_METHOD(qbool, IsFramebufferEnabled3D, void)
 
 // Debug primitives
-RENDERER_METHOD(void, Draw3DLines, const r_debug_line_vertex_t* vertices, int vertex_count, float thickness)
+RENDERER_METHOD(void, Draw3DLines, const r_debug_line_vertex_t* vertices, int vertex_count, float thickness, qbool xray)
+RENDERER_METHOD(void, Draw3DPolygons, const r_debug_line_vertex_t* vertices, int vertex_count, qbool xray)
 
 // Post-processing (scene)
 RENDERER_METHOD(void, RenderView, void)

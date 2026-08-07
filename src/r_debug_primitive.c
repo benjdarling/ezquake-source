@@ -14,18 +14,49 @@ void R_Draw3DLines(const r_debug_line_vertex_t* vertices, int vertex_count, floa
 	if (!vertices || vertex_count <= 0)
 		return;
 
-	renderer.Draw3DLines(vertices, vertex_count, thickness);
+	renderer.Draw3DLines(vertices, vertex_count, thickness, false);
+}
+
+void R_Draw3DLinesXRay(const r_debug_line_vertex_t* vertices, int vertex_count, float thickness)
+{
+	if (!vertices || vertex_count <= 0)
+		return;
+
+	renderer.Draw3DLines(vertices, vertex_count, thickness, true);
+}
+
+void R_Draw3DPolygons(const r_debug_line_vertex_t* vertices, int vertex_count, qbool xray)
+{
+	if (!vertices || vertex_count <= 0)
+		return;
+
+	renderer.Draw3DPolygons(vertices, vertex_count, xray);
 }
 
 #ifdef RENDERER_OPTION_CLASSIC_OPENGL
-void GLC_Draw3DLines(const r_debug_line_vertex_t* vertices, int vertex_count, float thickness)
+void GLC_Draw3DLines(const r_debug_line_vertex_t* vertices, int vertex_count, float thickness, qbool xray)
 {
 	int i;
 
 	R_ProgramUse(r_program_none);
-	R_ApplyRenderingState(r_state_debug_lines);
+	R_ApplyRenderingState(xray ? r_state_debug_lines_xray : r_state_debug_lines);
 	R_CustomLineWidth(thickness);
 	GLC_Begin(GL_LINES);
+	for (i = 0; i < vertex_count; ++i) {
+		R_CustomColor4ubv(vertices[i].color);
+		GLC_Vertex3fv(vertices[i].position);
+	}
+	GLC_End();
+}
+
+void GLC_Draw3DPolygons(const r_debug_line_vertex_t* vertices, int vertex_count, qbool xray)
+{
+	int i;
+
+	R_ProgramUse(r_program_none);
+	R_ApplyRenderingState(xray ? r_state_debug_polygons_xray :
+		r_state_debug_polygons);
+	GLC_Begin(GL_TRIANGLES);
 	for (i = 0; i < vertex_count; ++i) {
 		R_CustomColor4ubv(vertices[i].color);
 		GLC_Vertex3fv(vertices[i].position);
@@ -85,7 +116,7 @@ static qbool GLM_EnsureDebugLineResources(int size)
 		&& R_VertexArrayCreated(vao_debug_lines);
 }
 
-void GLM_Draw3DLines(const r_debug_line_vertex_t* vertices, int vertex_count, float thickness)
+void GLM_Draw3DLines(const r_debug_line_vertex_t* vertices, int vertex_count, float thickness, qbool xray)
 {
 	int size = vertex_count * sizeof(*vertices);
 	uintptr_t offset;
@@ -100,8 +131,25 @@ void GLM_Draw3DLines(const r_debug_line_vertex_t* vertices, int vertex_count, fl
 	offset = buffers.BufferOffset(r_buffer_debug_line_vertex_data) / sizeof(*vertices);
 
 	R_ProgramUse(r_program_debug_lines);
-	R_ApplyRenderingState(r_state_debug_lines);
+	R_ApplyRenderingState(xray ? r_state_debug_lines_xray : r_state_debug_lines);
 	R_CustomLineWidth(thickness);
 	GL_DrawArrays(GL_LINES, offset, vertex_count);
+}
+
+void GLM_Draw3DPolygons(const r_debug_line_vertex_t* vertices, int vertex_count, qbool xray)
+{
+	int size = vertex_count * sizeof(*vertices);
+	uintptr_t offset;
+
+	if (!GLM_CompileDebugLinesProgram())
+		return;
+	if (!GLM_EnsureDebugLineResources(size))
+		return;
+	buffers.Update(r_buffer_debug_line_vertex_data, size, (void*)vertices);
+	offset = buffers.BufferOffset(r_buffer_debug_line_vertex_data) / sizeof(*vertices);
+	R_ProgramUse(r_program_debug_lines);
+	R_ApplyRenderingState(xray ? r_state_debug_polygons_xray :
+		r_state_debug_polygons);
+	GL_DrawArrays(GL_TRIANGLES, offset, vertex_count);
 }
 #endif

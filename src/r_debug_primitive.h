@@ -7,5 +7,7 @@ typedef struct r_debug_line_vertex_s {
 } r_debug_line_vertex_t;
 
 void R_Draw3DLines(const r_debug_line_vertex_t* vertices, int vertex_count, float thickness);
+void R_Draw3DLinesXRay(const r_debug_line_vertex_t* vertices, int vertex_count, float thickness);
+void R_Draw3DPolygons(const r_debug_line_vertex_t* vertices, int vertex_count, qbool xray);
 
 #endif // EZQUAKE_R_DEBUG_PRIMITIVE_HEADER
