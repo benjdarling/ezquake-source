@@ -112,6 +112,8 @@ else()
     endif()
 endif()
 
+add_subdirectory(external/evobot)
+
 find_library(MATH m)
 
 # Override by configuring with -DOpenGL_GL_PREFERENCE=GLVND
@@ -227,6 +229,7 @@ set(qwprot_headers
 source_group(TREE ${QWPROT_SOURCE_DIR} PREFIX "Header Files/qwprot" FILES ${qwprot_headers})
 
 set(server_headers
+		${SOURCE_DIR}/evobot_ezq_adapter.h
         ${SOURCE_DIR}/g_public.h
         ${SOURCE_DIR}/pr2.h
         ${SOURCE_DIR}/pr_comp.h
@@ -241,6 +244,7 @@ set(server_headers
         ${SOURCE_DIR}/vm_local.h
 )
 set(server
+		${SOURCE_DIR}/evobot_ezq_adapter.c
         ${SOURCE_DIR}/pr2_cmds.c
         ${SOURCE_DIR}/pr2_edict.c
         ${SOURCE_DIR}/pr2_exec.c
@@ -881,6 +885,7 @@ target_compile_definitions(ezquake PRIVATE
 )
 
 target_link_libraries(ezquake PRIVATE
+		evobot_core
         $<$<BOOL:${RENDERER_MODERN_OPENGL}>:shaders_modern>
         $<$<BOOL:${RENDERER_CLASSIC_OPENGL}>:shaders_classic>
         shaders_shared

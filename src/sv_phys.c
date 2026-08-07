@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #ifndef CLIENTONLY
 #include "qwsvdef.h"
+#include "evobot_ezq_adapter.h"
 
 /*
 
@@ -1071,6 +1072,7 @@ void SV_RunBots(void)
 
 	PR_GLOBAL(frametime) = sv_frametime;
 	SV_ProgStartFrame (true);
+	EvoBot_EZQ_PrepareBotCommands(sv_frametime);
 
 	//
 	// Run bots physics.

@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #ifndef CLIENTONLY
 #include "qwsvdef.h"
+#include "evobot_ezq_adapter.h"
 
 #ifndef SERVERONLY
 void CL_ClearState(void);
@@ -236,6 +237,7 @@ void SV_SpawnServer(char *mapname, qbool devmap, char* entityfile, qbool loading
 	snprintf (oldmap, MAP_NAME_LEN, "%s", sv.mapname);
 
 	Con_DPrintf ("SpawnServer: %s\n",mapname);
+	EvoBot_EZQ_MapCleared();
 
 #ifndef SERVERONLY
 	// As client+server we do it here.
@@ -260,6 +262,7 @@ void SV_SpawnServer(char *mapname, qbool devmap, char* entityfile, qbool loading
 			Info_RemoveAll(&svs.clients[i]._userinfoshort_ctx_);
 			SV_FullClientUpdate(&svs.clients[i], &sv.reliable_datagram);
 			svs.clients[i].isBot = 0;
+			svs.clients[i].gamecodeBot = 0;
 		}
 	}
 #endif
@@ -628,6 +631,7 @@ void SV_SpawnServer(char *mapname, qbool devmap, char* entityfile, qbool loading
 	sv.signon_buffer_size[sv.num_signon_buffers-1] = sv.signon.cursize;
 
 	Info_SetValueForKey (svs.info, "map", sv.mapname, MAX_SERVERINFO_STRING);
+	EvoBot_EZQ_MapLoaded();
 
 	// calltimeofday.
 	{

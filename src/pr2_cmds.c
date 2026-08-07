@@ -2103,25 +2103,30 @@ intptr_t PF2_Map_Extension(char *name, int mapto)
 }
 /////////Bot Functions
 extern cvar_t maxclients, maxspectators;
-int PF2_Add_Bot(char *name, int bottomcolor, int topcolor, char *skin)
+int SV_AddBotClient(const char *name, int bottomcolor, int topcolor, const char *skin, qbool gamecode_bot)
 {
 	client_t *cl, *newcl = NULL;
 	int     edictnum;
-	int     clients, i;
+	int     clients, spectators, i;
 	extern char *shortinfotbl[];
 	char   *s;
 	edict_t *ent;
 	eval_t *val;
 	int old_self;
+	client_t *old_client = NULL;
+	edict_t *old_player = NULL;
 	char info[MAX_EXT_INFO_STRING];
 
 	// count up the clients and spectators
 	clients = 0;
+	spectators = 0;
 	for ( i = 0, cl = svs.clients; i < MAX_CLIENTS; i++, cl++ )
 	{
 		if ( cl->state == cs_free )
 			continue;
-		if ( !cl->spectator )
+		if ( cl->spectator )
+			spectators++;
+		else
 			clients++;
 	}
 
@@ -2173,6 +2178,7 @@ int PF2_Add_Bot(char *name, int bottomcolor, int topcolor, char *skin)
 	newcl->datagram.maxsize = sizeof( newcl->datagram_buf );
 	newcl->spectator = 0;
 	newcl->isBot = 1;
+	newcl->gamecodeBot = gamecode_bot;
 	SV_SetClientConnectionTime(newcl);
 	strlcpy(newcl->name, name, sizeof(newcl->name));
 
@@ -2180,7 +2186,7 @@ int PF2_Add_Bot(char *name, int bottomcolor, int topcolor, char *skin)
 	val = PR2_GetEdictFieldValue( ent, "gravity" ); // FIXME: do it similar to maxspeed
 	if ( val )
 		val->_float = 1.0;
-	sv_client->maxspeed = sv_maxspeed.value;
+	newcl->maxspeed = sv_maxspeed.value;
 
 	if (fofs_maxspeed)
 		EdictFieldFloat(ent, fofs_maxspeed) = sv_maxspeed.value;
@@ -2189,7 +2195,7 @@ int PF2_Add_Bot(char *name, int bottomcolor, int topcolor, char *skin)
 	ent->v->colormap = edictnum;
 	val = PR2_GetEdictFieldValue(ent, "isBot"); // FIXME: do it similar to maxspeed
 	if( val )
-		val->_int = 1;
+		val->_int = gamecode_bot;
 
 	// restore client name.
 	PR_SetEntityString(ent, ent->v->netname, newcl->name);
@@ -2216,18 +2222,47 @@ int PF2_Add_Bot(char *name, int bottomcolor, int topcolor, char *skin)
 	// }
 
 	newcl->disable_updates_stop = -1.0;	// Vladis
+	if (!sv_vm)
+	{
+		PR_GameSetNewParms();
+		for (i = 0; i < NUM_SPAWN_PARMS; i++)
+			newcl->spawn_parms[i] = (&PR_GLOBAL(parm1))[i];
+	}
 
 	SV_FullClientUpdate( newcl, &sv.reliable_datagram );
 
 	old_self = pr_global_struct->self;
+	if (!sv_vm)
+	{
+		old_client = sv_client;
+		old_player = sv_player;
+		sv_client = newcl;
+		sv_player = newcl->edict;
+		for (i = 0; i < NUM_SPAWN_PARMS; i++)
+			(&PR_GLOBAL(parm1))[i] = newcl->spawn_parms[i];
+	}
 	pr_global_struct->time = sv.time;
 	pr_global_struct->self = EDICT_TO_PROG(newcl->edict);
+	if (!sv_vm)
+		G_FLOAT(OFS_PARM0) = (float)newcl->vip;
 
 	PR2_GameClientConnect(0);
+	pr_global_struct->time = sv.time;
+	pr_global_struct->self = EDICT_TO_PROG(newcl->edict);
 	PR2_GamePutClientInServer(0);
 
+	if (!sv_vm)
+	{
+		sv_client = old_client;
+		sv_player = old_player;
+	}
 	pr_global_struct->self = old_self;
 	return edictnum;
+}
+
+int PF2_Add_Bot(char *name, int bottomcolor, int topcolor, char *skin)
+{
+	return SV_AddBotClient(name, bottomcolor, topcolor, skin, true);
 }
 
 void RemoveBot(client_t *cl)
@@ -2237,8 +2272,7 @@ void RemoveBot(client_t *cl)
 		return;
 
 	pr_global_struct->self = EDICT_TO_PROG(cl->edict);
-	if ( sv_vm )
-		PR2_GameClientDisconnect(0);
+	PR2_GameClientDisconnect(0);
 
 	cl->old_frags = 0;
 	cl->edict->v->frags = 0.0;
@@ -2250,6 +2284,7 @@ void RemoveBot(client_t *cl)
 
 	SV_FullClientUpdate( cl, &sv.reliable_datagram );
 	cl->isBot = 0;
+	cl->gamecodeBot = 0;
 }
 
 void PF2_Remove_Bot(int entnum)

@@ -63,6 +63,8 @@ int SV_PointContents (vec3_t p);
 // returns the CONTENTS_* value from the world at the given point.
 // does not check any entities at all
 
+trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t *eorg, vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end);
+
 edict_t	*SV_TestEntityPosition (edict_t *ent);
 
 trace_t SV_Trace (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type, edict_t *passedict);
