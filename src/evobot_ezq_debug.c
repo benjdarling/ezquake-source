@@ -15,21 +15,39 @@ typedef enum evobot_ezq_debug_layer_e
 	EVOBOT_EZQ_DEBUG_INTERACTOR,
 	EVOBOT_EZQ_DEBUG_REACH_WALK,
 	EVOBOT_EZQ_DEBUG_REACH_DROP,
+	EVOBOT_EZQ_DEBUG_REACH_JUMP,
+	EVOBOT_EZQ_DEBUG_REACH_TELEPORT,
 	EVOBOT_EZQ_DEBUG_REACH_SWIM,
 	EVOBOT_EZQ_DEBUG_ROUTE,
 	EVOBOT_EZQ_DEBUG_ROUTE_BLOCKED,
 	EVOBOT_EZQ_DEBUG_ROUTE_CONDITIONAL,
 	EVOBOT_EZQ_DEBUG_ROUTE_FRONTIER,
+	EVOBOT_EZQ_DEBUG_PLAN_BLOCKER,
+	EVOBOT_EZQ_DEBUG_PLAN_GOAL,
+	EVOBOT_EZQ_DEBUG_PLAN_RELATION,
+	EVOBOT_EZQ_DEBUG_PLAN_PLATFORM,
+	EVOBOT_EZQ_DEBUG_PLAN_BOARD,
+	EVOBOT_EZQ_DEBUG_PLAN_EXIT,
 	EVOBOT_EZQ_DEBUG_PROBLEM_REACHABLE,
 	EVOBOT_EZQ_DEBUG_PROBLEM_ADJACENT,
 	EVOBOT_EZQ_DEBUG_PROBLEM_PORTAL,
 	EVOBOT_EZQ_DEBUG_PROBLEM_GROUND_SOURCE,
 	EVOBOT_EZQ_DEBUG_PROBLEM_GROUND_DESTINATION,
+	EVOBOT_EZQ_DEBUG_PROBLEM_REJECTED,
+	EVOBOT_EZQ_DEBUG_PROBLEM_SOURCE_SUPPORT,
+	EVOBOT_EZQ_DEBUG_PROBLEM_DESTINATION_SUPPORT,
+	EVOBOT_EZQ_DEBUG_PROBLEM_OVERLAP,
 	EVOBOT_EZQ_DEBUG_PROBLEM_CROSSING,
 	EVOBOT_EZQ_DEBUG_PROBLEM_START,
 	EVOBOT_EZQ_DEBUG_PROBLEM_DESIRED,
 	EVOBOT_EZQ_DEBUG_PROBLEM_ACTUAL,
-	EVOBOT_EZQ_DEBUG_PROBLEM_PATH
+	EVOBOT_EZQ_DEBUG_PROBLEM_PATH,
+	EVOBOT_EZQ_DEBUG_AIR_DROP_PATH,
+	EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH,
+	EVOBOT_EZQ_DEBUG_AIR_REJECTED,
+	EVOBOT_EZQ_DEBUG_AIR_COLLISION,
+	EVOBOT_EZQ_DEBUG_AIR_LAUNCH,
+	EVOBOT_EZQ_DEBUG_AIR_LANDING
 } evobot_ezq_debug_layer_t;
 
 typedef struct evobot_ezq_debug_line_s
@@ -60,9 +78,15 @@ static cvar_t evobot_nav_show_interactors = { "evobot_nav_show_interactors", "0"
 static cvar_t evobot_nav_show_reach = { "evobot_nav_show_reach", "0" };
 static cvar_t evobot_nav_show_walk = { "evobot_nav_show_walk", "1" };
 static cvar_t evobot_nav_show_drop = { "evobot_nav_show_drop", "1" };
+static cvar_t evobot_nav_show_jump = { "evobot_nav_show_jump", "1" };
+static cvar_t evobot_nav_show_teleport = { "evobot_nav_show_teleport", "1" };
 static cvar_t evobot_nav_show_swim = { "evobot_nav_show_swim", "1" };
 static cvar_t evobot_nav_show_route = { "evobot_nav_show_route", "0" };
+static cvar_t evobot_nav_show_plan = { "evobot_nav_show_plan", "0" };
 static cvar_t evobot_nav_show_problem = { "evobot_nav_show_problem", "0" };
+static cvar_t evobot_nav_show_jump_candidates = {
+	"evobot_nav_show_jump_candidates", "0"
+};
 static cvar_t evobot_nav_show_problem_xray = {
 	"evobot_nav_show_problem_xray", "0"
 };
@@ -84,6 +108,8 @@ static uint32_t evobot_ezq_debug_selected_area;
 static uint32_t evobot_ezq_debug_selected_portal;
 static uint64_t evobot_ezq_debug_selected_nav_revision;
 static uint64_t evobot_ezq_debug_selected_route_revision;
+static size_t evobot_ezq_debug_selected_problem;
+static int evobot_ezq_debug_selected_problem_valid;
 
 static void EvoBot_EZQ_DebugSegmentCenter(const evobot_nav_segment_t *segment,
 	evobot_vec3_t *center);
@@ -325,6 +351,24 @@ static void EvoBot_EZQ_DebugAddProblemCandidate(uint32_t portal_id,
 	if (!EvoBot_NavDebugWalkCandidate(portal_id, source_area,
 		destination_area, &candidate) || !candidate.present)
 		return;
+	EvoBot_EZQ_DebugAddProblemLine(&candidate.portal_interval.start,
+		&candidate.portal_interval.end, source_area, destination_area,
+		EVOBOT_EZQ_DEBUG_PROBLEM_REJECTED);
+	if (candidate.source_support_samples)
+		EvoBot_EZQ_DebugAddProblemLine(&candidate.source_support_interval.start,
+			&candidate.source_support_interval.end, source_area, destination_area,
+			EVOBOT_EZQ_DEBUG_PROBLEM_SOURCE_SUPPORT);
+	if (candidate.destination_support_samples)
+		EvoBot_EZQ_DebugAddProblemLine(
+			&candidate.destination_support_interval.start,
+			&candidate.destination_support_interval.end, source_area,
+			destination_area, EVOBOT_EZQ_DEBUG_PROBLEM_DESTINATION_SUPPORT);
+	if (candidate.overlap_samples)
+		EvoBot_EZQ_DebugAddProblemLine(&candidate.overlap_interval.start,
+			&candidate.overlap_interval.end, source_area, destination_area,
+			EVOBOT_EZQ_DEBUG_PROBLEM_OVERLAP);
+	if (!candidate.height_valid || !candidate.source_valid)
+		return;
 	EvoBot_EZQ_DebugAddProblemLine(&candidate.start.start,
 		&candidate.start.end, source_area, destination_area,
 		EVOBOT_EZQ_DEBUG_PROBLEM_CROSSING);
@@ -350,6 +394,44 @@ static void EvoBot_EZQ_DebugAddProblemCandidate(uint32_t portal_id,
 			&candidate.result.state.origin, source_area, destination_area,
 			EVOBOT_EZQ_DEBUG_PROBLEM_ACTUAL);
 	}
+}
+
+static void EvoBot_EZQ_DebugAddAirCandidate(uint32_t portal_id,
+	uint32_t source_area, uint32_t destination_area,
+	evobot_nav_debug_air_kind_t kind)
+{
+	evobot_nav_debug_air_candidate_t candidate;
+	evobot_ezq_debug_layer_t path_layer;
+	unsigned int i;
+
+	if (!EvoBot_NavDebugAirCandidate(portal_id, source_area, destination_area,
+		kind, &candidate) || !candidate.present)
+		return;
+	path_layer = candidate.valid ?
+		(kind == EVOBOT_NAV_DEBUG_AIR_DROP ?
+		 EVOBOT_EZQ_DEBUG_AIR_DROP_PATH : EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH) :
+		EVOBOT_EZQ_DEBUG_AIR_REJECTED;
+	EvoBot_EZQ_DebugAddProblemLine(&candidate.portal_edge.start,
+		&candidate.portal_edge.end, source_area, destination_area, path_layer);
+	for (i = 1; i < candidate.trajectory_count; i++)
+	{
+		EvoBot_EZQ_DebugAddProblemLine(&candidate.trajectory[i - 1],
+			&candidate.trajectory[i], source_area, destination_area, path_layer);
+		if (candidate.trajectory_blocked[i])
+			EvoBot_EZQ_DebugAddMarker(&candidate.trajectory[i], source_area,
+				destination_area, EVOBOT_EZQ_DEBUG_AIR_COLLISION);
+	}
+	EvoBot_EZQ_DebugAddMarker(&candidate.start_origin, source_area,
+		destination_area, EVOBOT_EZQ_DEBUG_PROBLEM_START);
+	if (candidate.airborne)
+		EvoBot_EZQ_DebugAddMarker(&candidate.launch_origin, source_area,
+			destination_area, EVOBOT_EZQ_DEBUG_AIR_LAUNCH);
+	if (candidate.landed)
+		EvoBot_EZQ_DebugAddMarker(&candidate.landing_origin, source_area,
+			destination_area, EVOBOT_EZQ_DEBUG_AIR_LANDING);
+	else if (candidate.move_steps)
+		EvoBot_EZQ_DebugAddMarker(&candidate.final_origin, source_area,
+			destination_area, EVOBOT_EZQ_DEBUG_AIR_REJECTED);
 }
 
 static void EvoBot_EZQ_DebugSelectedPortalDirection(
@@ -418,11 +500,15 @@ static int EvoBot_EZQ_DebugAddProblem(
 		return 0;
 	EvoBot_EZQ_DebugAddProblemCandidate(portal_id, source_area,
 		destination_area);
+	EvoBot_EZQ_DebugAddAirCandidate(portal_id, source_area, destination_area,
+		EVOBOT_NAV_DEBUG_AIR_DROP);
+	EvoBot_EZQ_DebugAddAirCandidate(portal_id, source_area, destination_area,
+		EVOBOT_NAV_DEBUG_AIR_JUMP_UP);
 	return 1;
 }
 
-static void EvoBot_EZQ_DebugAddBounds(const evobot_bounds_t *bounds,
-	evobot_interactor_kind_t kind)
+static void EvoBot_EZQ_DebugAddLayerBounds(const evobot_bounds_t *bounds,
+	evobot_interactor_kind_t kind, evobot_ezq_debug_layer_t layer)
 {
 	static const int edges[12][2] = {
 		{ 0, 1 }, { 1, 3 }, { 3, 2 }, { 2, 0 },
@@ -441,9 +527,23 @@ static void EvoBot_EZQ_DebugAddBounds(const evobot_bounds_t *bounds,
 	for (i = 0; i < 12; ++i)
 	{
 		EvoBot_EZQ_DebugAddLine(&corners[edges[i][0]], &corners[edges[i][1]],
-			0, 0, EVOBOT_EZQ_DEBUG_INTERACTOR, EVOBOT_CONTENTS_OTHER,
+			0, 0, layer, EVOBOT_CONTENTS_OTHER,
 			kind, 0);
 	}
+}
+
+static void EvoBot_EZQ_DebugAddBounds(const evobot_bounds_t *bounds,
+	evobot_interactor_kind_t kind)
+{
+	EvoBot_EZQ_DebugAddLayerBounds(bounds, kind, EVOBOT_EZQ_DEBUG_INTERACTOR);
+}
+
+static void EvoBot_EZQ_DebugBoundsCenter(const evobot_bounds_t *bounds,
+	evobot_vec3_t *center)
+{
+	int axis;
+	for (axis = 0; axis < 3; axis++)
+		center->v[axis] = (bounds->mins.v[axis] + bounds->maxs.v[axis]) * 0.5f;
 }
 
 static void EvoBot_EZQ_DebugAddReachLine(const evobot_vec3_t *start,
@@ -455,6 +555,29 @@ static void EvoBot_EZQ_DebugAddReachLine(const evobot_vec3_t *start,
 		EVOBOT_INTERACTOR_OTHER, 1);
 	evobot_ezq_debug_lines[evobot_ezq_debug_line_count - 1].travel_type =
 		reachability->travel_type;
+}
+
+static void EvoBot_EZQ_DebugAddTeleportBounds(const evobot_bounds_t *bounds,
+	const evobot_nav_reachability_t *reachability)
+{
+	static const int edges[12][2] = {
+		{ 0, 1 }, { 1, 3 }, { 3, 2 }, { 2, 0 },
+		{ 4, 5 }, { 5, 7 }, { 7, 6 }, { 6, 4 },
+		{ 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
+	};
+	evobot_vec3_t corners[8];
+	int i;
+
+	for (i = 0; i < 8; i++)
+	{
+		corners[i].v[0] = (i & 1) ? bounds->maxs.v[0] : bounds->mins.v[0];
+		corners[i].v[1] = (i & 2) ? bounds->maxs.v[1] : bounds->mins.v[1];
+		corners[i].v[2] = (i & 4) ? bounds->maxs.v[2] : bounds->mins.v[2];
+	}
+	for (i = 0; i < 12; i++)
+		EvoBot_EZQ_DebugAddReachLine(&corners[edges[i][0]],
+			&corners[edges[i][1]], reachability,
+			EVOBOT_EZQ_DEBUG_REACH_TELEPORT);
 }
 
 static void EvoBot_EZQ_DebugSegmentCenter(const evobot_nav_segment_t *segment,
@@ -485,6 +608,10 @@ static void EvoBot_EZQ_DebugAddReachability(
 		layer = EVOBOT_EZQ_DEBUG_REACH_WALK;
 	else if (reachability->travel_type == EVOBOT_NAV_TRAVEL_DROP)
 		layer = EVOBOT_EZQ_DEBUG_REACH_DROP;
+	else if (reachability->travel_type == EVOBOT_NAV_TRAVEL_JUMP)
+		layer = EVOBOT_EZQ_DEBUG_REACH_JUMP;
+	else if (reachability->travel_type == EVOBOT_NAV_TRAVEL_TELEPORT)
+		layer = EVOBOT_EZQ_DEBUG_REACH_TELEPORT;
 	else
 		layer = EVOBOT_EZQ_DEBUG_REACH_SWIM;
 	EvoBot_EZQ_DebugAddReachLine(&reachability->start.start,
@@ -492,6 +619,9 @@ static void EvoBot_EZQ_DebugAddReachability(
 	EvoBot_EZQ_DebugSegmentCenter(&reachability->start, &start);
 	EvoBot_EZQ_DebugSegmentCenter(&reachability->destination, &end);
 	EvoBot_EZQ_DebugAddReachLine(&start, &end, reachability, layer);
+	if (reachability->travel_type == EVOBOT_NAV_TRAVEL_TELEPORT)
+		EvoBot_EZQ_DebugAddTeleportBounds(&reachability->entry_bounds,
+			reachability);
 	for (axis = 0; axis < 3; axis++)
 		direction.v[axis] = end.v[axis] - start.v[axis];
 	length = sqrtf(direction.v[0] * direction.v[0] +
@@ -654,6 +784,67 @@ static int EvoBot_EZQ_DebugBuildCache(const evobot_nav_debug_summary_t *summary,
 			}
 		}
 	}
+	{
+		evobot_nav_plan_summary_t plan;
+		if (EvoBot_NavPlanDebugSummary(&plan))
+		{
+			for (i = 0; i < plan.subgoal_count; i++)
+			{
+				evobot_nav_plan_goal_t goal;
+				evobot_nav_debug_interactor_t activator;
+				evobot_nav_debug_interactor_t affected;
+				evobot_nav_debug_area_t area;
+				evobot_vec3_t activator_center;
+				evobot_vec3_t affected_center;
+
+				if (!EvoBot_NavPlanDebugGoal(i, &goal) ||
+					!EvoBot_NavDebugInteractor(goal.activator_interactor - 1,
+						&activator) ||
+					!EvoBot_NavDebugInteractor(goal.affected_interactor - 1,
+						&affected))
+					continue;
+				EvoBot_EZQ_DebugAddLayerBounds(&activator.bounds, activator.kind,
+					EVOBOT_EZQ_DEBUG_PLAN_GOAL);
+				EvoBot_EZQ_DebugAddLayerBounds(&affected.bounds, affected.kind,
+					EVOBOT_EZQ_DEBUG_PLAN_BLOCKER);
+				if (goal.activation_area && EvoBot_NavDebugArea(goal.activation_area - 1,
+					&area))
+					EvoBot_EZQ_DebugAddLayerBounds(&area.bounds, activator.kind,
+						EVOBOT_EZQ_DEBUG_PLAN_GOAL);
+				EvoBot_EZQ_DebugBoundsCenter(&activator.bounds, &activator_center);
+				EvoBot_EZQ_DebugBoundsCenter(&affected.bounds, &affected_center);
+				EvoBot_EZQ_DebugAddLine(&activator_center, &affected_center, 0, 0,
+					EVOBOT_EZQ_DEBUG_PLAN_RELATION, EVOBOT_CONTENTS_OTHER,
+					activator.kind, 1);
+			}
+		}
+	}
+	if (route_summary)
+	{
+		for (i = 0; i < route_summary->route_length; i++)
+		{
+			evobot_nav_route_step_t step;
+			evobot_nav_reachability_t reachability;
+			evobot_nav_debug_interactor_t mover;
+
+			if (!EvoBot_NavRouteDebugStep(i, &step, &reachability) ||
+				reachability.travel_type != EVOBOT_NAV_TRAVEL_PLATFORM ||
+				!reachability.mover_interactor ||
+				!EvoBot_NavDebugInteractor(reachability.mover_interactor - 1, &mover))
+				continue;
+			EvoBot_EZQ_DebugAddLayerBounds(&mover.endpoint_a_bounds, mover.kind,
+				EVOBOT_EZQ_DEBUG_PLAN_PLATFORM);
+			EvoBot_EZQ_DebugAddLayerBounds(&mover.endpoint_b_bounds, mover.kind,
+				EVOBOT_EZQ_DEBUG_PLAN_PLATFORM);
+			EvoBot_EZQ_DebugAddLine(&mover.endpoint_a, &mover.endpoint_b, 0, 0,
+				EVOBOT_EZQ_DEBUG_PLAN_PLATFORM, EVOBOT_CONTENTS_OTHER,
+				mover.kind, 1);
+			EvoBot_EZQ_DebugAddLayerBounds(&reachability.board_region, mover.kind,
+				EVOBOT_EZQ_DEBUG_PLAN_BOARD);
+			EvoBot_EZQ_DebugAddLayerBounds(&reachability.exit_region, mover.kind,
+				EVOBOT_EZQ_DEBUG_PLAN_EXIT);
+		}
+	}
 	if (!EvoBot_EZQ_DebugAddProblem(summary, route_summary))
 		return 0;
 
@@ -685,6 +876,10 @@ static int EvoBot_EZQ_DebugLineEnabled(const evobot_ezq_debug_line_t *line)
 		return evobot_nav_show_reach.integer && evobot_nav_show_walk.integer;
 	case EVOBOT_EZQ_DEBUG_REACH_DROP:
 		return evobot_nav_show_reach.integer && evobot_nav_show_drop.integer;
+	case EVOBOT_EZQ_DEBUG_REACH_JUMP:
+		return evobot_nav_show_reach.integer && evobot_nav_show_jump.integer;
+	case EVOBOT_EZQ_DEBUG_REACH_TELEPORT:
+		return evobot_nav_show_reach.integer && evobot_nav_show_teleport.integer;
 	case EVOBOT_EZQ_DEBUG_REACH_SWIM:
 		return evobot_nav_show_reach.integer && evobot_nav_show_swim.integer;
 	case EVOBOT_EZQ_DEBUG_ROUTE:
@@ -692,17 +887,36 @@ static int EvoBot_EZQ_DebugLineEnabled(const evobot_ezq_debug_line_t *line)
 	case EVOBOT_EZQ_DEBUG_ROUTE_CONDITIONAL:
 	case EVOBOT_EZQ_DEBUG_ROUTE_FRONTIER:
 		return evobot_nav_show_route.integer;
+	case EVOBOT_EZQ_DEBUG_PLAN_BLOCKER:
+	case EVOBOT_EZQ_DEBUG_PLAN_GOAL:
+	case EVOBOT_EZQ_DEBUG_PLAN_RELATION:
+	case EVOBOT_EZQ_DEBUG_PLAN_PLATFORM:
+	case EVOBOT_EZQ_DEBUG_PLAN_BOARD:
+	case EVOBOT_EZQ_DEBUG_PLAN_EXIT:
+		return evobot_nav_show_plan.integer;
 	case EVOBOT_EZQ_DEBUG_PROBLEM_REACHABLE:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_ADJACENT:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_PORTAL:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_GROUND_SOURCE:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_GROUND_DESTINATION:
+	case EVOBOT_EZQ_DEBUG_PROBLEM_REJECTED:
+	case EVOBOT_EZQ_DEBUG_PROBLEM_SOURCE_SUPPORT:
+	case EVOBOT_EZQ_DEBUG_PROBLEM_DESTINATION_SUPPORT:
+	case EVOBOT_EZQ_DEBUG_PROBLEM_OVERLAP:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_CROSSING:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_START:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_DESIRED:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_ACTUAL:
 	case EVOBOT_EZQ_DEBUG_PROBLEM_PATH:
 		return evobot_nav_show_problem.integer;
+	case EVOBOT_EZQ_DEBUG_AIR_DROP_PATH:
+	case EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH:
+	case EVOBOT_EZQ_DEBUG_AIR_REJECTED:
+	case EVOBOT_EZQ_DEBUG_AIR_COLLISION:
+	case EVOBOT_EZQ_DEBUG_AIR_LAUNCH:
+	case EVOBOT_EZQ_DEBUG_AIR_LANDING:
+		return evobot_nav_show_problem.integer &&
+			evobot_nav_show_jump_candidates.integer;
 	default:
 		return 0;
 	}
@@ -725,6 +939,8 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 	static const unsigned char interactor[4] = { 255, 176, 64, 255 };
 	static const unsigned char reach_walk[4] = { 255, 240, 64, 255 };
 	static const unsigned char reach_drop[4] = { 255, 64, 192, 255 };
+	static const unsigned char reach_jump[4] = { 64, 255, 224, 255 };
+	static const unsigned char reach_teleport[4] = { 224, 96, 255, 255 };
 	static const unsigned char reach_swim[4] = { 64, 160, 255, 255 };
 	static const unsigned char reach_water_entry[4] = { 64, 255, 255, 255 };
 	static const unsigned char reach_water_exit[4] = { 192, 255, 255, 255 };
@@ -733,16 +949,32 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 	static const unsigned char route_blocked[4] = { 255, 48, 48, 255 };
 	static const unsigned char route_conditional[4] = { 255, 160, 32, 255 };
 	static const unsigned char route_frontier[4] = { 255, 64, 255, 255 };
+	static const unsigned char plan_blocker[4] = { 255, 32, 32, 255 };
+	static const unsigned char plan_goal[4] = { 64, 255, 255, 255 };
+	static const unsigned char plan_relation[4] = { 192, 96, 255, 255 };
+	static const unsigned char plan_platform[4] = { 255, 208, 48, 255 };
+	static const unsigned char plan_board[4] = { 64, 255, 96, 255 };
+	static const unsigned char plan_exit[4] = { 96, 160, 255, 255 };
 	static const unsigned char problem_reachable[4] = { 255, 32, 32, 255 };
 	static const unsigned char problem_adjacent[4] = { 255, 112, 32, 255 };
 	static const unsigned char problem_portal[4] = { 255, 255, 255, 255 };
 	static const unsigned char problem_ground_source[4] = { 255, 176, 32, 255 };
 	static const unsigned char problem_ground_destination[4] = { 96, 160, 255, 255 };
+	static const unsigned char problem_rejected[4] = { 255, 48, 48, 255 };
+	static const unsigned char problem_source_support[4] = { 64, 255, 96, 255 };
+	static const unsigned char problem_destination_support[4] = { 64, 160, 255, 255 };
+	static const unsigned char problem_overlap[4] = { 255, 224, 48, 255 };
 	static const unsigned char problem_crossing[4] = { 255, 255, 64, 255 };
 	static const unsigned char problem_start[4] = { 64, 255, 64, 255 };
 	static const unsigned char problem_desired[4] = { 64, 255, 255, 255 };
 	static const unsigned char problem_actual[4] = { 255, 64, 255, 255 };
 	static const unsigned char problem_path[4] = { 192, 192, 192, 255 };
+	static const unsigned char air_drop_path[4] = { 255, 64, 192, 255 };
+	static const unsigned char air_jump_path[4] = { 64, 255, 224, 255 };
+	static const unsigned char air_rejected[4] = { 255, 48, 48, 255 };
+	static const unsigned char air_collision[4] = { 255, 128, 32, 255 };
+	static const unsigned char air_launch[4] = { 96, 255, 96, 255 };
+	static const unsigned char air_landing[4] = { 96, 160, 255, 255 };
 	const unsigned char *source = interactor;
 
 	if (line->layer == EVOBOT_EZQ_DEBUG_ROUTE)
@@ -753,6 +985,18 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 		source = route_conditional;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_ROUTE_FRONTIER)
 		source = route_frontier;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PLAN_BLOCKER)
+		source = plan_blocker;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PLAN_GOAL)
+		source = plan_goal;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PLAN_RELATION)
+		source = plan_relation;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PLAN_PLATFORM)
+		source = plan_platform;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PLAN_BOARD)
+		source = plan_board;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PLAN_EXIT)
+		source = plan_exit;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_REACHABLE)
 		source = problem_reachable;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_ADJACENT)
@@ -763,6 +1007,14 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 		source = problem_ground_source;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_GROUND_DESTINATION)
 		source = problem_ground_destination;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_REJECTED)
+		source = problem_rejected;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_SOURCE_SUPPORT)
+		source = problem_source_support;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_DESTINATION_SUPPORT)
+		source = problem_destination_support;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_OVERLAP)
+		source = problem_overlap;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_CROSSING)
 		source = problem_crossing;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_START)
@@ -773,6 +1025,18 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 		source = problem_actual;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_PROBLEM_PATH)
 		source = problem_path;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_DROP_PATH)
+		source = air_drop_path;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH)
+		source = air_jump_path;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_REJECTED)
+		source = air_rejected;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_COLLISION)
+		source = air_collision;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_LAUNCH)
+		source = air_launch;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_LANDING)
+		source = air_landing;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_AREA)
 	{
 		if (line->contents == EVOBOT_CONTENTS_WATER)
@@ -794,6 +1058,10 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 		source = reach_walk;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_REACH_DROP)
 		source = reach_drop;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_REACH_JUMP)
+		source = reach_jump;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_REACH_TELEPORT)
+		source = reach_teleport;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_REACH_SWIM)
 	{
 		if (line->travel_type == EVOBOT_NAV_TRAVEL_WATER_ENTRY)
@@ -949,6 +1217,8 @@ static const char *EvoBot_EZQ_DebugTravelName(evobot_nav_travel_type_t type)
 	case EVOBOT_NAV_TRAVEL_WATER_EXIT: return "WATER_EXIT";
 	case EVOBOT_NAV_TRAVEL_UNRESOLVED_WATER_JUMP:
 		return "UNRESOLVED_WATER_JUMP";
+	case EVOBOT_NAV_TRAVEL_JUMP: return "JUMP";
+	case EVOBOT_NAV_TRAVEL_TELEPORT: return "TELEPORT";
 	}
 	return "UNKNOWN";
 }
@@ -997,6 +1267,108 @@ static void EvoBot_EZQ_DebugShowAreaReach_f(void)
 	}
 }
 
+static void EvoBot_EZQ_DebugPrintSegment(const char *name,
+	const evobot_nav_segment_t *segment)
+{
+	Con_Printf("%s: %.1f %.1f %.1f -> %.1f %.1f %.1f\n", name,
+		segment->start.v[0], segment->start.v[1], segment->start.v[2],
+		segment->end.v[0], segment->end.v[1], segment->end.v[2]);
+}
+
+static void EvoBot_EZQ_DebugSelectProblem(int direction)
+{
+	evobot_nav_debug_summary_t nav_summary;
+	evobot_nav_route_summary_t route_summary;
+	evobot_nav_route_problem_t problem;
+	size_t count = EvoBot_NavRouteDebugProblemCount();
+
+	memset(&route_summary, 0, sizeof(route_summary));
+	EvoBot_NavRouteDebugSummary(&route_summary);
+	if (!count)
+	{
+		Con_Printf("EvoBot: no shared route-boundary problems; run a route "
+			"to an unreachable destination first\n");
+		evobot_ezq_debug_selected_problem_valid = 0;
+		return;
+	}
+	if (!evobot_ezq_debug_selected_problem_valid ||
+		evobot_ezq_debug_selected_route_revision != route_summary.route_revision)
+		evobot_ezq_debug_selected_problem = direction < 0 ? count - 1 : 0;
+	else if (direction < 0)
+		evobot_ezq_debug_selected_problem =
+			evobot_ezq_debug_selected_problem ?
+			evobot_ezq_debug_selected_problem - 1 : count - 1;
+	else
+		evobot_ezq_debug_selected_problem =
+			(evobot_ezq_debug_selected_problem + 1) % count;
+	if (!EvoBot_NavRouteDebugProblem(evobot_ezq_debug_selected_problem,
+		&problem) || !EvoBot_NavDebugSummary(&nav_summary))
+	{
+		Con_Printf("EvoBot: selected route problem is unavailable\n");
+		evobot_ezq_debug_selected_problem_valid = 0;
+		return;
+	}
+	evobot_ezq_debug_selected_problem_valid = 1;
+	evobot_ezq_debug_selected_area = problem.source_area;
+	evobot_ezq_debug_selected_portal = problem.portal_id;
+	evobot_ezq_debug_selected_nav_revision = nav_summary.revision;
+	evobot_ezq_debug_selected_route_revision = route_summary.route_revision;
+	evobot_ezq_debug_revision = 0;
+	Cvar_SetValue(&evobot_nav_show_problem, 1);
+	Cvar_SetValue(&evobot_nav_show_interactors, 1);
+	Con_Printf("EvoBot route problem %zu/%zu: portal %u, %u -> %u, %s\n",
+		evobot_ezq_debug_selected_problem + 1, count, problem.portal_id,
+		problem.source_area, problem.destination_area,
+		EvoBot_NavRouteDebugProblemCauseName(problem.cause));
+	Con_Printf("forward PM: moved %s, reached %s, segment %s, hull %s, "
+		"grounded %s, water %d, final WALK %s\n",
+		problem.forward.movement_succeeded ? "yes" : "no",
+		problem.forward.reached_destination ? "yes" : "no",
+		problem.forward.segment_reached_destination ? "yes" : "no",
+		problem.forward.hull_crossed_portal ? "yes" : "no",
+		problem.forward.result.state.on_ground ? "yes" : "no",
+		problem.forward.result.state.water_level,
+		problem.forward.final_walk ? "yes" : "no");
+}
+
+static void EvoBot_EZQ_DebugProblemNext_f(void)
+{
+	EvoBot_EZQ_DebugSelectProblem(1);
+}
+
+static void EvoBot_EZQ_DebugProblemPrev_f(void)
+{
+	EvoBot_EZQ_DebugSelectProblem(-1);
+}
+
+static void EvoBot_EZQ_DebugPrintAirCandidate(const char *label,
+	uint32_t portal_id, uint32_t source_area, uint32_t destination_area,
+	evobot_nav_debug_air_kind_t kind)
+{
+	evobot_nav_debug_air_candidate_t candidate;
+
+	memset(&candidate, 0, sizeof(candidate));
+	if (!EvoBot_NavDebugAirCandidate(portal_id, source_area, destination_area,
+		kind, &candidate))
+	{
+		Con_Printf("%s evaluation: unavailable\n", label);
+		return;
+	}
+	Con_Printf("%s: %s, rejection %s, attempts %u, edge %u width %.1f\n"
+		"  floor delta %.1f, headroom %.1f, speed %.1f, approach %u\n"
+		"  PM steps %u blocked %u, entered %s, airborne %s, landed %s area %u\n"
+		"  rise %.1f, horizontal %.1f, time %.3f\n",
+		label, candidate.valid ? "valid" : "rejected",
+		EvoBot_NavDebugAirRejectionName(candidate.rejection),
+		candidate.attempts, candidate.edge_index, candidate.portal_width,
+		candidate.height_delta, candidate.headroom, candidate.command_speed,
+		candidate.approach_frames, candidate.move_steps,
+		candidate.blocked_steps, candidate.entered_destination ? "yes" : "no",
+		candidate.airborne ? "yes" : "no", candidate.landed ? "yes" : "no",
+		candidate.landing_area, candidate.maximum_rise,
+		candidate.horizontal_displacement, candidate.elapsed);
+}
+
 static void EvoBot_EZQ_DebugPortal_f(void)
 {
 	evobot_nav_debug_summary_t summary;
@@ -1034,29 +1406,95 @@ static void EvoBot_EZQ_DebugPortal_f(void)
 	Cvar_SetValue(&evobot_nav_show_problem, 1);
 	Con_Printf("EvoBot portal %u selected\nsource area: %u\n"
 		"destination area: %u\n", portal_id, source_area, destination_area);
+	EvoBot_EZQ_DebugPrintAirCandidate("DROP", portal_id, source_area,
+		destination_area, EVOBOT_NAV_DEBUG_AIR_DROP);
+	EvoBot_EZQ_DebugPrintAirCandidate("JUMP", portal_id, source_area,
+		destination_area, EVOBOT_NAV_DEBUG_AIR_JUMP_UP);
 	memset(&candidate, 0, sizeof(candidate));
 	if (!EvoBot_NavDebugWalkCandidate(portal_id, source_area,
-		destination_area, &candidate) || !candidate.present)
+		destination_area, &candidate))
 	{
-		Con_Printf("WALK candidate: none\n");
+		Con_Printf("WALK evaluation: unavailable\n");
 		return;
 	}
-	Con_Printf("WALK candidate edge: %u\nstart: %.1f %.1f %.1f\n"
-		"desired: %.1f %.1f %.1f\n",
-		candidate.edge_index, candidate.start_origin.v[0],
-		candidate.start_origin.v[1], candidate.start_origin.v[2],
+	Con_Printf("WALK direction: %s\n",
+		candidate.direction_valid ?
+			(candidate.stacked_decomposition ? "stacked decomposition" :
+			(candidate.projected_interval_direction ?
+				"projected portal interval" : "portal plane")) : "unavailable");
+	if (candidate.direction_valid)
+		Con_Printf("direction: %.3f %.3f %.3f\n",
+			candidate.direction.v[0], candidate.direction.v[1],
+			candidate.direction.v[2]);
+	Con_Printf("projected portal intervals: %u\n",
+		candidate.portal_interval_count);
+	if (!candidate.present)
+	{
+		Con_Printf("WALK candidate: none\nfinal WALK: no\n");
+		return;
+	}
+	Con_Printf("selected portal edge: %u\nsamples tested: %u\n"
+		"source support: %u/%u\ndestination support: %u/%u\n"
+		"support overlap: %u/%u\n", candidate.edge_index,
+		candidate.sample_count, candidate.source_support_samples,
+		candidate.sample_count, candidate.destination_support_samples,
+		candidate.sample_count, candidate.overlap_samples,
+		candidate.sample_count);
+	Con_Printf("ownership: source %s, destination %s\n",
+		candidate.source_in_area ? "yes" : "no",
+		candidate.destination_in_area ? "yes" : "no");
+	EvoBot_EZQ_DebugPrintSegment("portal interval", &candidate.portal_interval);
+	if (candidate.source_support_samples)
+		EvoBot_EZQ_DebugPrintSegment("source support interval",
+			&candidate.source_support_interval);
+	if (candidate.destination_support_samples)
+		EvoBot_EZQ_DebugPrintSegment("destination support interval",
+			&candidate.destination_support_interval);
+	if (candidate.overlap_samples)
+		EvoBot_EZQ_DebugPrintSegment("usable overlap interval",
+			&candidate.overlap_interval);
+	if (!candidate.height_valid || !candidate.source_valid)
+	{
+		Con_Printf("PM_PlayerMove candidate: none\nfinal WALK: no\n");
+		return;
+	}
+	Con_Printf("height delta: %.2f\nstep limit: %.2f\n"
+		"initial origin: %.1f %.1f %.1f\ninitial on ground: %s\n"
+		"command: msec %u forward %.1f side %.1f up %.1f\n"
+		"desired: %.1f %.1f %.1f\n", candidate.height_delta,
+		candidate.step_limit, candidate.initial_state.origin.v[0],
+		candidate.initial_state.origin.v[1],
+		candidate.initial_state.origin.v[2],
+		candidate.initial_state.on_ground ? "yes" : "no",
+		candidate.command.msec, candidate.command.forward_move,
+		candidate.command.side_move, candidate.command.up_move,
 		candidate.desired_destination.v[0],
 		candidate.desired_destination.v[1],
 		candidate.desired_destination.v[2]);
 	if (candidate.movement_succeeded)
-		Con_Printf("actual: %.1f %.1f %.1f\nPM steps: %u\n"
-			"reached destination: %s\n",
+		Con_Printf("actual: %.1f %.1f %.1f\n"
+			"actual velocity: %.1f %.1f %.1f\nactual on ground: %s\n"
+			"supported arrival: %s\nsegment entered area: %s\n"
+			"player hull crossed portal: %s\n"
+			"PM steps: %u\nreached destination: %s\nwater jump: %s\n",
 			candidate.result.state.origin.v[0],
 			candidate.result.state.origin.v[1],
-			candidate.result.state.origin.v[2], candidate.move_steps,
-			candidate.reached_destination ? "yes" : "no");
+			candidate.result.state.origin.v[2],
+			candidate.result.state.velocity.v[0],
+			candidate.result.state.velocity.v[1],
+			candidate.result.state.velocity.v[2],
+			candidate.result.state.on_ground ? "yes" : "no",
+			candidate.supported_arrival ? "yes" : "no",
+			candidate.segment_reached_destination ? "yes" : "no",
+			candidate.hull_crossed_portal ? "yes" : "no",
+			candidate.move_steps,
+			candidate.reached_destination ? "yes" : "no",
+			candidate.water_jump ? "yes" : "no");
 	else
 		Con_Printf("PM_PlayerMove result: unavailable\n");
+	Con_Printf("PM validation: %s\nfinal WALK: %s\n",
+		candidate.pm_validation_passed ? "pass" : "fail",
+		candidate.final_walk ? "yes" : "no");
 }
 
 void EvoBot_EZQ_DebugInit(void)
@@ -1070,9 +1508,13 @@ void EvoBot_EZQ_DebugInit(void)
 	Cvar_Register(&evobot_nav_show_reach);
 	Cvar_Register(&evobot_nav_show_walk);
 	Cvar_Register(&evobot_nav_show_drop);
+	Cvar_Register(&evobot_nav_show_jump);
+	Cvar_Register(&evobot_nav_show_teleport);
 	Cvar_Register(&evobot_nav_show_swim);
 	Cvar_Register(&evobot_nav_show_route);
+	Cvar_Register(&evobot_nav_show_plan);
 	Cvar_Register(&evobot_nav_show_problem);
+	Cvar_Register(&evobot_nav_show_jump_candidates);
 	Cvar_Register(&evobot_nav_show_problem_xray);
 	Cvar_Register(&evobot_nav_show_radius);
 	Cmd_AddCommand("evobot_nav_show_area", EvoBot_EZQ_DebugShowArea_f);
@@ -1080,6 +1522,8 @@ void EvoBot_EZQ_DebugInit(void)
 	Cmd_AddCommand("evobot_nav_show_area_reach",
 		EvoBot_EZQ_DebugShowAreaReach_f);
 	Cmd_AddCommand("evobot_nav_debug_portal", EvoBot_EZQ_DebugPortal_f);
+	Cmd_AddCommand("evobot_nav_problem_next", EvoBot_EZQ_DebugProblemNext_f);
+	Cmd_AddCommand("evobot_nav_problem_prev", EvoBot_EZQ_DebugProblemPrev_f);
 }
 
 void EvoBot_EZQ_DebugDraw(void)
