@@ -44,6 +44,7 @@ typedef enum evobot_ezq_debug_layer_e
 	EVOBOT_EZQ_DEBUG_PROBLEM_PATH,
 	EVOBOT_EZQ_DEBUG_AIR_DROP_PATH,
 	EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH,
+	EVOBOT_EZQ_DEBUG_AIR_WATER_PATH,
 	EVOBOT_EZQ_DEBUG_AIR_REJECTED,
 	EVOBOT_EZQ_DEBUG_AIR_COLLISION,
 	EVOBOT_EZQ_DEBUG_AIR_LAUNCH,
@@ -86,6 +87,9 @@ static cvar_t evobot_nav_show_plan = { "evobot_nav_show_plan", "0" };
 static cvar_t evobot_nav_show_problem = { "evobot_nav_show_problem", "0" };
 static cvar_t evobot_nav_show_jump_candidates = {
 	"evobot_nav_show_jump_candidates", "0"
+};
+static cvar_t evobot_nav_show_water_jump = {
+	"evobot_nav_show_water_jump", "0"
 };
 static cvar_t evobot_nav_show_problem_xray = {
 	"evobot_nav_show_problem_xray", "0"
@@ -408,9 +412,11 @@ static void EvoBot_EZQ_DebugAddAirCandidate(uint32_t portal_id,
 		kind, &candidate) || !candidate.present)
 		return;
 	path_layer = candidate.valid ?
-		(kind == EVOBOT_NAV_DEBUG_AIR_DROP ?
-		 EVOBOT_EZQ_DEBUG_AIR_DROP_PATH : EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH) :
-		EVOBOT_EZQ_DEBUG_AIR_REJECTED;
+		(kind == EVOBOT_NAV_DEBUG_AIR_DROP ? EVOBOT_EZQ_DEBUG_AIR_DROP_PATH :
+		 (kind == EVOBOT_NAV_DEBUG_AIR_WATER_EXIT ||
+		  kind == EVOBOT_NAV_DEBUG_AIR_WATER_JUMP ?
+		  EVOBOT_EZQ_DEBUG_AIR_WATER_PATH :
+		  EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH)) : EVOBOT_EZQ_DEBUG_AIR_REJECTED;
 	EvoBot_EZQ_DebugAddProblemLine(&candidate.portal_edge.start,
 		&candidate.portal_edge.end, source_area, destination_area, path_layer);
 	for (i = 1; i < candidate.trajectory_count; i++)
@@ -504,6 +510,10 @@ static int EvoBot_EZQ_DebugAddProblem(
 		EVOBOT_NAV_DEBUG_AIR_DROP);
 	EvoBot_EZQ_DebugAddAirCandidate(portal_id, source_area, destination_area,
 		EVOBOT_NAV_DEBUG_AIR_JUMP_UP);
+	EvoBot_EZQ_DebugAddAirCandidate(portal_id, source_area, destination_area,
+		EVOBOT_NAV_DEBUG_AIR_WATER_EXIT);
+	EvoBot_EZQ_DebugAddAirCandidate(portal_id, source_area, destination_area,
+		EVOBOT_NAV_DEBUG_AIR_WATER_JUMP);
 	return 1;
 }
 
@@ -911,12 +921,18 @@ static int EvoBot_EZQ_DebugLineEnabled(const evobot_ezq_debug_line_t *line)
 		return evobot_nav_show_problem.integer;
 	case EVOBOT_EZQ_DEBUG_AIR_DROP_PATH:
 	case EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH:
+		return evobot_nav_show_problem.integer &&
+			evobot_nav_show_jump_candidates.integer;
+	case EVOBOT_EZQ_DEBUG_AIR_WATER_PATH:
+		return evobot_nav_show_problem.integer &&
+			evobot_nav_show_water_jump.integer;
 	case EVOBOT_EZQ_DEBUG_AIR_REJECTED:
 	case EVOBOT_EZQ_DEBUG_AIR_COLLISION:
 	case EVOBOT_EZQ_DEBUG_AIR_LAUNCH:
 	case EVOBOT_EZQ_DEBUG_AIR_LANDING:
 		return evobot_nav_show_problem.integer &&
-			evobot_nav_show_jump_candidates.integer;
+			(evobot_nav_show_jump_candidates.integer ||
+			 evobot_nav_show_water_jump.integer);
 	default:
 		return 0;
 	}
@@ -944,6 +960,7 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 	static const unsigned char reach_swim[4] = { 64, 160, 255, 255 };
 	static const unsigned char reach_water_entry[4] = { 64, 255, 255, 255 };
 	static const unsigned char reach_water_exit[4] = { 192, 255, 255, 255 };
+	static const unsigned char reach_water_jump[4] = { 64, 128, 255, 255 };
 	static const unsigned char reach_unresolved[4] = { 255, 96, 64, 255 };
 	static const unsigned char route[4] = { 64, 255, 160, 255 };
 	static const unsigned char route_blocked[4] = { 255, 48, 48, 255 };
@@ -971,6 +988,7 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 	static const unsigned char problem_path[4] = { 192, 192, 192, 255 };
 	static const unsigned char air_drop_path[4] = { 255, 64, 192, 255 };
 	static const unsigned char air_jump_path[4] = { 64, 255, 224, 255 };
+	static const unsigned char air_water_path[4] = { 64, 160, 255, 255 };
 	static const unsigned char air_rejected[4] = { 255, 48, 48, 255 };
 	static const unsigned char air_collision[4] = { 255, 128, 32, 255 };
 	static const unsigned char air_launch[4] = { 96, 255, 96, 255 };
@@ -1029,6 +1047,8 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 		source = air_drop_path;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_JUMP_PATH)
 		source = air_jump_path;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_WATER_PATH)
+		source = air_water_path;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_REJECTED)
 		source = air_rejected;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_AIR_COLLISION)
@@ -1068,6 +1088,8 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 			source = reach_water_entry;
 		else if (line->travel_type == EVOBOT_NAV_TRAVEL_WATER_EXIT)
 			source = reach_water_exit;
+		else if (line->travel_type == EVOBOT_NAV_TRAVEL_WATER_JUMP)
+			source = reach_water_jump;
 		else if (line->travel_type == EVOBOT_NAV_TRAVEL_UNRESOLVED_WATER_JUMP)
 			source = reach_unresolved;
 		else
@@ -1215,6 +1237,7 @@ static const char *EvoBot_EZQ_DebugTravelName(evobot_nav_travel_type_t type)
 	case EVOBOT_NAV_TRAVEL_SWIM: return "SWIM";
 	case EVOBOT_NAV_TRAVEL_WATER_ENTRY: return "WATER_ENTRY";
 	case EVOBOT_NAV_TRAVEL_WATER_EXIT: return "WATER_EXIT";
+	case EVOBOT_NAV_TRAVEL_WATER_JUMP: return "WATER_JUMP";
 	case EVOBOT_NAV_TRAVEL_UNRESOLVED_WATER_JUMP:
 		return "UNRESOLVED_WATER_JUMP";
 	case EVOBOT_NAV_TRAVEL_JUMP: return "JUMP";
@@ -1515,6 +1538,7 @@ void EvoBot_EZQ_DebugInit(void)
 	Cvar_Register(&evobot_nav_show_plan);
 	Cvar_Register(&evobot_nav_show_problem);
 	Cvar_Register(&evobot_nav_show_jump_candidates);
+	Cvar_Register(&evobot_nav_show_water_jump);
 	Cvar_Register(&evobot_nav_show_problem_xray);
 	Cvar_Register(&evobot_nav_show_radius);
 	Cmd_AddCommand("evobot_nav_show_area", EvoBot_EZQ_DebugShowArea_f);

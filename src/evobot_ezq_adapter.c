@@ -292,7 +292,8 @@ static evobot_interactor_kind_t EvoBot_EZQ_InteractorKind(const char *classname)
 		return EVOBOT_INTERACTOR_TELEPORT_DESTINATION;
 	if (!strcmp(classname, "trigger_changelevel"))
 		return EVOBOT_INTERACTOR_LEVEL_EXIT;
-	if (!strcmp(classname, "trigger_once") || !strcmp(classname, "trigger_multiple"))
+	if (!strcmp(classname, "trigger_once") ||
+		!strcmp(classname, "trigger_multiple") || !strcmp(classname, "trigger_push"))
 		return EVOBOT_INTERACTOR_TRIGGER;
 	if (!strcmp(classname, "trigger_counter") || !strcmp(classname, "trigger_relay"))
 		return EVOBOT_INTERACTOR_LOGIC;
@@ -373,6 +374,90 @@ static float EvoBot_EZQ_OptionalFloat(edict_t *entity, const char *field,
 	return value ? value->_float : fallback;
 }
 
+static edict_t *EvoBot_EZQ_FindPathCorner(const char *targetname)
+{
+	int i;
+
+	if (!targetname || !targetname[0])
+		return NULL;
+	for (i = 0; i < sv.num_edicts; i++)
+	{
+		edict_t *entity = EDICT_NUM(i);
+		const char *classname;
+
+		if (!entity || entity->e.free || !entity->v->classname)
+			continue;
+		classname = PR_GetEntityString(entity->v->classname);
+		if (strcmp(classname, "path_corner") && strcmp(classname, "path_corner_train"))
+			continue;
+		if (!strcmp(PR_GetEntityString(entity->v->targetname), targetname))
+			return entity;
+	}
+	return NULL;
+}
+
+static void EvoBot_EZQ_AddMoverStop(evobot_host_interactor_t *interactor,
+	const evobot_bounds_t *bounds)
+{
+	int axis;
+
+	if (interactor->movement_stop_count >= EVOBOT_NAV_MOVER_STOPS_MAX)
+		return;
+	interactor->movement_stop_bounds[interactor->movement_stop_count++] = *bounds;
+	for (axis = 0; axis < 3; axis++)
+	{
+		if (bounds->mins.v[axis] < interactor->swept_bounds.mins.v[axis])
+			interactor->swept_bounds.mins.v[axis] = bounds->mins.v[axis];
+		if (bounds->maxs.v[axis] > interactor->swept_bounds.maxs.v[axis])
+			interactor->swept_bounds.maxs.v[axis] = bounds->maxs.v[axis];
+	}
+}
+
+static void EvoBot_EZQ_TrainStops(evobot_host_interactor_t *interactor)
+{
+	char next_target[EVOBOT_NAV_TARGET_MAX];
+	int guard;
+
+	EvoBot_EZQ_AddMoverStop(interactor, &interactor->bounds);
+	strlcpy(next_target, interactor->target, sizeof(next_target));
+	for (guard = 0; guard < EVOBOT_NAV_MOVER_STOPS_MAX - 1 && next_target[0]; guard++)
+	{
+		edict_t *corner = EvoBot_EZQ_FindPathCorner(next_target);
+		evobot_bounds_t stop;
+		int axis;
+
+		if (!corner)
+			break;
+		stop = interactor->bounds;
+		for (axis = 0; axis < 3; axis++)
+		{
+			float delta = corner->v->origin[axis] - interactor->bounds.mins.v[axis];
+			stop.mins.v[axis] += delta;
+			stop.maxs.v[axis] += delta;
+		}
+		EvoBot_EZQ_AddMoverStop(interactor, &stop);
+		strlcpy(next_target, PR_GetEntityString(corner->v->target),
+			sizeof(next_target));
+		if (interactor->movement_stop_count > 2)
+		{
+			const evobot_bounds_t *first = &interactor->movement_stop_bounds[0];
+			const evobot_bounds_t *last =
+				&interactor->movement_stop_bounds[interactor->movement_stop_count - 1];
+			if (fabsf(first->mins.v[0] - last->mins.v[0]) < 0.1f &&
+				fabsf(first->mins.v[1] - last->mins.v[1]) < 0.1f &&
+				fabsf(first->mins.v[2] - last->mins.v[2]) < 0.1f)
+				break;
+		}
+	}
+	interactor->has_movement = interactor->movement_stop_count > 1;
+	if (interactor->has_movement)
+	{
+		interactor->endpoint_a_bounds = interactor->movement_stop_bounds[0];
+		interactor->endpoint_b_bounds =
+			interactor->movement_stop_bounds[interactor->movement_stop_count - 1];
+	}
+}
+
 static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interactor)
 {
 	int found = 0;
@@ -430,12 +515,32 @@ static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interac
 			sizeof(interactor->target));
 		strlcpy(interactor->targetname, PR_GetEntityString(entity->v->targetname),
 			sizeof(interactor->targetname));
+		EvoBot_EZQ_CopyOptionalString(entity, "killtarget", interactor->killtarget,
+			sizeof(interactor->killtarget));
 		EvoBot_EZQ_CopyOptionalString(entity, "map", interactor->destination_map,
 			sizeof(interactor->destination_map));
 		interactor->spawnflags = (int)entity->v->spawnflags;
 		interactor->health = entity->v->health;
 		interactor->speed = EvoBot_EZQ_OptionalFloat(entity, "speed", 0);
 		interactor->wait = EvoBot_EZQ_OptionalFloat(entity, "wait", 0);
+		interactor->activation_required_count =
+			(int)EvoBot_EZQ_OptionalFloat(entity, "count", 0);
+		if (!strcmp(classname, "trigger_push"))
+		{
+			eval_t *movedir = PR_GetEdictFieldValue(entity, "movedir");
+			int axis;
+
+			if (movedir)
+			{
+				for (axis = 0; axis < 3; axis++)
+					interactor->velocity.v[axis] = movedir->vector[axis] *
+						interactor->speed * 10.0f;
+				interactor->has_velocity = 1;
+			}
+		}
+		if (!strcmp(classname, "trigger_counter") &&
+			interactor->activation_required_count <= 0)
+			interactor->activation_required_count = 2;
 		interactor->endpoint_a = interactor->origin;
 		interactor->endpoint_b = interactor->origin;
 		interactor->endpoint_a_bounds = interactor->bounds;
@@ -452,7 +557,10 @@ static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interac
 		else if (kind == EVOBOT_INTERACTOR_PLATFORM)
 			interactor->activation = interactor->targetname[0] ?
 				EVOBOT_ACTIVATION_EXTERNAL : EVOBOT_ACTIVATION_TOUCH;
-		else if (kind == EVOBOT_INTERACTOR_TRAIN || kind == EVOBOT_INTERACTOR_LOGIC)
+		else if (kind == EVOBOT_INTERACTOR_TRAIN)
+			interactor->activation = interactor->targetname[0] ?
+				EVOBOT_ACTIVATION_EXTERNAL : EVOBOT_ACTIVATION_APPROACH;
+		else if (kind == EVOBOT_INTERACTOR_LOGIC)
 			interactor->activation = EVOBOT_ACTIVATION_EXTERNAL;
 		else
 			interactor->activation = EVOBOT_ACTIVATION_NONE;
@@ -499,6 +607,13 @@ static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interac
 					sqrtf(distance) / interactor->speed : 0;
 			}
 		}
+		if (kind == EVOBOT_INTERACTOR_PLATFORM && interactor->has_movement)
+		{
+			EvoBot_EZQ_AddMoverStop(interactor, &interactor->endpoint_a_bounds);
+			EvoBot_EZQ_AddMoverStop(interactor, &interactor->endpoint_b_bounds);
+		}
+		else if (kind == EVOBOT_INTERACTOR_TRAIN)
+			EvoBot_EZQ_TrainStops(interactor);
 		return 1;
 	}
 
@@ -928,6 +1043,7 @@ static void EvoBot_EZQ_NavPlanExit_f(void)
 }
 
 static void EvoBot_EZQ_NavPlanStatus_f(void) { EvoBot_NavPlanPrintStatus(); }
+static void EvoBot_EZQ_NavPlanDump_f(void) { EvoBot_NavPlanPrintDump(); }
 static void EvoBot_EZQ_NavPlanClear_f(void) { EvoBot_NavPlanClear(); }
 
 static void EvoBot_EZQ_NavRouteArea_f(void)
@@ -1025,6 +1141,7 @@ void EvoBot_EZQ_Init(void)
 	Cmd_AddCommand("evobot_nav_route_validate", EvoBot_EZQ_NavRouteValidate_f);
 	Cmd_AddCommand("evobot_nav_plan_exit", EvoBot_EZQ_NavPlanExit_f);
 	Cmd_AddCommand("evobot_nav_plan_status", EvoBot_EZQ_NavPlanStatus_f);
+	Cmd_AddCommand("evobot_nav_plan_dump", EvoBot_EZQ_NavPlanDump_f);
 	Cmd_AddCommand("evobot_nav_plan_clear", EvoBot_EZQ_NavPlanClear_f);
 	EvoBot_EZQ_DebugInit();
 	evobot_ezq_initialized = 1;
