@@ -293,10 +293,15 @@ static evobot_interactor_kind_t EvoBot_EZQ_InteractorKind(const char *classname)
 	if (!strcmp(classname, "trigger_changelevel"))
 		return EVOBOT_INTERACTOR_LEVEL_EXIT;
 	if (!strcmp(classname, "trigger_once") ||
-		!strcmp(classname, "trigger_multiple") || !strcmp(classname, "trigger_push"))
+		!strcmp(classname, "trigger_multiple") || !strcmp(classname, "trigger_push") ||
+		!strcmp(classname, "item_sigil"))
 		return EVOBOT_INTERACTOR_TRIGGER;
-	if (!strcmp(classname, "trigger_counter") || !strcmp(classname, "trigger_relay"))
+	if (!strcmp(classname, "trigger_counter") || !strcmp(classname, "trigger_relay") ||
+		!strcmp(classname, "event_lightning") ||
+		!strcmp(classname, "monster_boss"))
 		return EVOBOT_INTERACTOR_LOGIC;
+	if (!strcmp(classname, "item_key1") || !strcmp(classname, "item_key2"))
+		return EVOBOT_INTERACTOR_ITEM;
 	return EVOBOT_INTERACTOR_OTHER;
 }
 
@@ -416,6 +421,8 @@ static void EvoBot_EZQ_AddMoverStop(evobot_host_interactor_t *interactor,
 static void EvoBot_EZQ_TrainStops(evobot_host_interactor_t *interactor)
 {
 	char next_target[EVOBOT_NAV_TARGET_MAX];
+	edict_t *visited[EVOBOT_NAV_MOVER_STOPS_MAX];
+	int visited_count = 0;
 	int guard;
 
 	EvoBot_EZQ_AddMoverStop(interactor, &interactor->bounds);
@@ -424,10 +431,20 @@ static void EvoBot_EZQ_TrainStops(evobot_host_interactor_t *interactor)
 	{
 		edict_t *corner = EvoBot_EZQ_FindPathCorner(next_target);
 		evobot_bounds_t stop;
+		int repeated = 0;
 		int axis;
+		int previous;
 
 		if (!corner)
 			break;
+		for (previous = 0; previous < visited_count; previous++)
+			if (visited[previous] == corner)
+			{
+				repeated = 1;
+				break;
+			}
+		if (!repeated)
+			visited[visited_count++] = corner;
 		stop = interactor->bounds;
 		for (axis = 0; axis < 3; axis++)
 		{
@@ -438,16 +455,8 @@ static void EvoBot_EZQ_TrainStops(evobot_host_interactor_t *interactor)
 		EvoBot_EZQ_AddMoverStop(interactor, &stop);
 		strlcpy(next_target, PR_GetEntityString(corner->v->target),
 			sizeof(next_target));
-		if (interactor->movement_stop_count > 2)
-		{
-			const evobot_bounds_t *first = &interactor->movement_stop_bounds[0];
-			const evobot_bounds_t *last =
-				&interactor->movement_stop_bounds[interactor->movement_stop_count - 1];
-			if (fabsf(first->mins.v[0] - last->mins.v[0]) < 0.1f &&
-				fabsf(first->mins.v[1] - last->mins.v[1]) < 0.1f &&
-				fabsf(first->mins.v[2] - last->mins.v[2]) < 0.1f)
-				break;
-		}
+		if (repeated)
+			break;
 	}
 	interactor->has_movement = interactor->movement_stop_count > 1;
 	if (interactor->has_movement)
@@ -515,6 +524,22 @@ static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interac
 			sizeof(interactor->target));
 		strlcpy(interactor->targetname, PR_GetEntityString(entity->v->targetname),
 			sizeof(interactor->targetname));
+		if (!strcmp(classname, "event_lightning"))
+		{
+			int boss_index;
+			for (boss_index = 0; boss_index < sv.num_edicts; boss_index++)
+			{
+				edict_t *boss = EDICT_NUM(boss_index);
+				if (!boss->e.free && boss->v->classname &&
+					!strcmp(PR_GetEntityString(boss->v->classname), "monster_boss"))
+				{
+					strlcpy(interactor->target,
+						PR_GetEntityString(boss->v->targetname),
+						sizeof(interactor->target));
+					break;
+				}
+			}
+		}
 		EvoBot_EZQ_CopyOptionalString(entity, "killtarget", interactor->killtarget,
 			sizeof(interactor->killtarget));
 		EvoBot_EZQ_CopyOptionalString(entity, "map", interactor->destination_map,
@@ -525,6 +550,18 @@ static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interac
 		interactor->wait = EvoBot_EZQ_OptionalFloat(entity, "wait", 0);
 		interactor->activation_required_count =
 			(int)EvoBot_EZQ_OptionalFloat(entity, "count", 0);
+		if (kind == EVOBOT_INTERACTOR_ITEM)
+		{
+			interactor->inventory_grants = (uint32_t)entity->v->items &
+				(uint32_t)(IT_KEY1 | IT_KEY2);
+			interactor->pickup_persistent = coop.value != 0;
+		}
+		else if (kind == EVOBOT_INTERACTOR_DOOR)
+		{
+			interactor->inventory_requires = (uint32_t)entity->v->items &
+				(uint32_t)(IT_KEY1 | IT_KEY2);
+			interactor->inventory_consumes = interactor->inventory_requires;
+		}
 		if (!strcmp(classname, "trigger_push"))
 		{
 			eval_t *movedir = PR_GetEdictFieldValue(entity, "movedir");
@@ -541,12 +578,15 @@ static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interac
 		if (!strcmp(classname, "trigger_counter") &&
 			interactor->activation_required_count <= 0)
 			interactor->activation_required_count = 2;
+		if (!strcmp(classname, "monster_boss"))
+			interactor->activation_required_count = skill.value == 0 ? 1 : 3;
 		interactor->endpoint_a = interactor->origin;
 		interactor->endpoint_b = interactor->origin;
 		interactor->endpoint_a_bounds = interactor->bounds;
 		interactor->endpoint_b_bounds = interactor->bounds;
 		if (kind == EVOBOT_INTERACTOR_DOOR)
-			interactor->activation = interactor->health > 0 ?
+			interactor->activation = interactor->inventory_requires ?
+				EVOBOT_ACTIVATION_TOUCH : interactor->health > 0 ?
 				EVOBOT_ACTIVATION_SHOOT : interactor->targetname[0] ?
 				EVOBOT_ACTIVATION_EXTERNAL : EVOBOT_ACTIVATION_APPROACH;
 		else if (kind == EVOBOT_INTERACTOR_BUTTON)
@@ -562,9 +602,12 @@ static int EvoBot_EZQ_GetInteractor(int index, evobot_host_interactor_t *interac
 				EVOBOT_ACTIVATION_EXTERNAL : EVOBOT_ACTIVATION_APPROACH;
 		else if (kind == EVOBOT_INTERACTOR_LOGIC)
 			interactor->activation = EVOBOT_ACTIVATION_EXTERNAL;
+		else if (kind == EVOBOT_INTERACTOR_ITEM)
+			interactor->activation = EVOBOT_ACTIVATION_TOUCH;
 		else
 			interactor->activation = EVOBOT_ACTIVATION_NONE;
 		interactor->lifetime = !strcmp(classname, "trigger_once") ||
+			!strcmp(classname, "item_sigil") ||
 			interactor->wait < 0 ? EVOBOT_INTERACTOR_PERSISTENT :
 			EVOBOT_INTERACTOR_TEMPORARY;
 

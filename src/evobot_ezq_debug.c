@@ -949,6 +949,7 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 	static const unsigned char slime[4] = { 96, 255, 48, 255 };
 	static const unsigned char lava[4] = { 255, 64, 16, 255 };
 	static const unsigned char door[4] = { 255, 224, 48, 255 };
+	static const unsigned char item[4] = { 96, 255, 128, 255 };
 	static const unsigned char teleporter[4] = { 192, 64, 255, 255 };
 	static const unsigned char destination[4] = { 255, 255, 255, 255 };
 	static const unsigned char level_exit[4] = { 255, 96, 96, 255 };
@@ -995,7 +996,9 @@ static void EvoBot_EZQ_DebugLineColor(const evobot_ezq_debug_line_t *line,
 	static const unsigned char air_landing[4] = { 96, 160, 255, 255 };
 	const unsigned char *source = interactor;
 
-	if (line->layer == EVOBOT_EZQ_DEBUG_ROUTE)
+	if (line->interactor_kind == EVOBOT_INTERACTOR_ITEM)
+		source = item;
+	else if (line->layer == EVOBOT_EZQ_DEBUG_ROUTE)
 		source = route;
 	else if (line->layer == EVOBOT_EZQ_DEBUG_ROUTE_BLOCKED)
 		source = route_blocked;
